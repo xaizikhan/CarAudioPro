@@ -1,4 +1,4 @@
-# Car Audio Pro – Final Build
+# Owais Car Audio Pro – Final Build
 
 This is the real Android app (Kotlin), matching the design we finalised:
 Easy / Equalizer / Subwoofer tabs, a colourful spectrum "mountain" EQ curve,

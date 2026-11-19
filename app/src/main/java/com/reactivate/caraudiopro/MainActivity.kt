@@ -24,6 +24,9 @@ class MainActivity : Activity() {
     private lateinit var st: AudioSettings
     private lateinit var root: LinearLayout
     private var liveDot: View? = null
+    private var curveView: SoundCurveView? = null
+    private var eqValueTv: TextView? = null
+    private var eqFreqTv: TextView? = null
     private var tab = "easy"           // easy | eq | sub
     private var selBand = 2
     private val handler = Handler(Looper.getMainLooper())
@@ -92,8 +95,8 @@ class MainActivity : Activity() {
     private fun buildHeader(t: ThemeColors): View {
         val row = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
 
-        val title = LinearLayout(this).apply { minimumWidth = dp(220) }
-        title.addView(label("CAR AUDIO PRO", 18f, t.text, true))
+        val title = LinearLayout(this).apply { minimumWidth = dp(260) }
+        title.addView(label("OWAIS CAR AUDIO PRO", 15f, t.text, true))
         title.addView(label(" DSP", 18f, Palette.ACCENT, true))
         row.addView(title)
 
@@ -101,7 +104,7 @@ class MainActivity : Activity() {
             background = roundedRect(dp(14), t.panelBgTop, t.panelBorder, dp(1))
             setPadding(dp(4), dp(4), dp(4), dp(4))
         }
-        listOf("easy" to "EASY", "eq" to "EQUALIZER", "sub" to "SUBWOOFER").forEach { (id, lbl) ->
+        listOf("easy" to "CUSTOM", "eq" to "EQUALIZER", "sub" to "SUBWOOFER").forEach { (id, lbl) ->
             val active = tab == id
             pill.addView(tabChip(lbl, active, t) { tab = id; render() },
                 LinearLayout.LayoutParams(0, dp(40), 1f).apply { setMargins(dp(2), 0, dp(2), 0) })
@@ -154,13 +157,25 @@ class MainActivity : Activity() {
         panel.addView(headRow)
         panel.addView(spacer(6))
 
+        val labels = listOf("25","40","63","100","160","250","400","630","1k","1.6k","2.5k","4k","6.3k","10k","16k")
         val curve = SoundCurveView(this).apply {
             bands = st.bands
             interactive = tab == "eq"
             selected = selBand
             theme = t
             onBandTap = { i -> selBand = i; tab = "eq"; render() }
+            onBandDrag = { i, v ->
+                val rv = (Math.round(v * 2f) / 2f).coerceIn(-12f, 12f)
+                st.bands[i] = rv
+                selBand = i
+                AudioEngine.apply(st)
+                curveView?.let { sv -> sv.bands = st.bands; sv.selected = i }
+                eqValueTv?.text = fmtDb(rv)
+                eqFreqTv?.let { tv -> tv.text = labels[i] + " Hz"; tv.setTextColor(SpectrumColors.at(i / 14f)) }
+            }
+            onBandDragEnd = { st.save(this@MainActivity) }
         }
+        curveView = curve
         panel.addView(curve, LinearLayout.LayoutParams(-1, dp(if (tab == "eq") 300 else 150)))
         return panel
     }
@@ -177,29 +192,40 @@ class MainActivity : Activity() {
             for (i in 0 until 15) { num += st.bands[i] * w[i]; den += w[i] }
             return if (den > 0f) num / den else 0f
         }
-        fun shift(w: FloatArray, delta: Float) {
+        // Live while dragging: engine + on-screen numbers update instantly, no full-screen rebuild per tick.
+        fun shiftLive(w: FloatArray, delta: Float, valueTv: TextView) {
+            for (i in 0 until 15) if (w[i] > 0f) st.bands[i] = (st.bands[i] + delta * w[i]).coerceIn(-12f, 12f)
+            AudioEngine.apply(st)
+            valueTv.text = fmtDb(avg(w))
+            curveView?.let { it.bands = st.bands }
+        }
+        fun shiftStep(w: FloatArray, delta: Float) {
             for (i in 0 until 15) if (w[i] > 0f) st.bands[i] = (st.bands[i] + delta * w[i]).coerceIn(-12f, 12f)
             commit(); render()
         }
 
-        row.addView(knobCard(t, "BASS", Palette.BASS, "Drums aur kick ka punch", avg(wB),
-            minus = { shift(wB, -1f) }, plus = { shift(wB, 1f) },
-            onSlide = { v -> shift(wB, v - avg(wB)) }), LinearLayout.LayoutParams(0, -1, 1f).apply { rightMargin = dp(8) })
-        row.addView(knobCard(t, "MID", Palette.MID, "Vocals aur instruments", avg(wM),
-            minus = { shift(wM, -1f) }, plus = { shift(wM, 1f) },
-            onSlide = { v -> shift(wM, v - avg(wM)) }), LinearLayout.LayoutParams(0, -1, 1f).apply { leftMargin = dp(4); rightMargin = dp(4) })
-        row.addView(knobCard(t, "TREBLE", Palette.TREBLE, "Clarity aur detail", avg(wT),
-            minus = { shift(wT, -1f) }, plus = { shift(wT, 1f) },
-            onSlide = { v -> shift(wT, v - avg(wT)) }), LinearLayout.LayoutParams(0, -1, 1f).apply { leftMargin = dp(4); rightMargin = dp(4) })
-        row.addView(knobCard(t, "SUBWOOFER", Palette.SUB, "Sirf gehra bass", st.subLevel,
-            minus = { st.subLevel = (st.subLevel - 1f).coerceIn(-12f, 12f); commit(); render() },
-            plus = { st.subLevel = (st.subLevel + 1f).coerceIn(-12f, 12f); commit(); render() },
-            onSlide = { v -> st.subLevel = v.coerceIn(-12f, 12f); commit(); render() }), LinearLayout.LayoutParams(0, -1, 1f).apply { leftMargin = dp(8) })
+        val bassValue = TextView(this)
+        row.addView(knobCard(t, "BASS", Palette.BASS, "Drums aur kick ka punch", avg(wB), bassValue,
+            minus = { shiftStep(wB, -1f) }, plus = { shiftStep(wB, 1f) },
+            onSlide = { v -> shiftLive(wB, v - avg(wB), bassValue) },
+            onSlideEnd = { st.save(this) }), LinearLayout.LayoutParams(0, -1, 1f).apply { rightMargin = dp(8) })
+
+        val midValue = TextView(this)
+        row.addView(knobCard(t, "MID", Palette.MID, "Vocals aur instruments", avg(wM), midValue,
+            minus = { shiftStep(wM, -1f) }, plus = { shiftStep(wM, 1f) },
+            onSlide = { v -> shiftLive(wM, v - avg(wM), midValue) },
+            onSlideEnd = { st.save(this) }), LinearLayout.LayoutParams(0, -1, 1f).apply { leftMargin = dp(4); rightMargin = dp(4) })
+
+        val trebleValue = TextView(this)
+        row.addView(knobCard(t, "TREBLE", Palette.TREBLE, "Clarity aur detail", avg(wT), trebleValue,
+            minus = { shiftStep(wT, -1f) }, plus = { shiftStep(wT, 1f) },
+            onSlide = { v -> shiftLive(wT, v - avg(wT), trebleValue) },
+            onSlideEnd = { st.save(this) }), LinearLayout.LayoutParams(0, -1, 1f).apply { leftMargin = dp(8) })
         return row
     }
 
-    private fun knobCard(t: ThemeColors, title: String, color: Int, hint: String, value: Float,
-                          minus: () -> Unit, plus: () -> Unit, onSlide: (Float) -> Unit): View {
+    private fun knobCard(t: ThemeColors, title: String, color: Int, hint: String, value: Float, valueTv: TextView,
+                          minus: () -> Unit, plus: () -> Unit, onSlide: (Float) -> Unit, onSlideEnd: () -> Unit): View {
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             background = roundedRect(dp(16), t.panelBgTop, t.panelBorder, dp(1))
@@ -207,7 +233,8 @@ class MainActivity : Activity() {
         }
         val head = LinearLayout(this)
         head.addView(label(title, 15f, color, true), LinearLayout.LayoutParams(0, -2, 1f))
-        head.addView(label(fmtDb(value), 24f, t.text, true))
+        valueTv.apply { text = fmtDb(value); textSize = 24f; setTextColor(t.text); setTypeface(null, Typeface.BOLD) }
+        head.addView(valueTv)
         card.addView(head)
         card.addView(label(hint, 11f, t.mutedText, false))
         card.addView(spacer(6))
@@ -226,7 +253,7 @@ class MainActivity : Activity() {
                     if (fromUser) onSlide(p / 2f - 12f)
                 }
                 override fun onStartTrackingTouch(sb: SeekBar) {}
-                override fun onStopTrackingTouch(sb: SeekBar) {}
+                override fun onStopTrackingTouch(sb: SeekBar) { onSlideEnd() }
             })
         }
         sliderRow.addView(seek, LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = dp(8); rightMargin = dp(8) })
@@ -236,8 +263,8 @@ class MainActivity : Activity() {
     }
 
     private fun knobButton(t: ThemeColors, txt: String, onClick: () -> Unit) = TextView(this).apply {
-        text = txt; textSize = 20f; gravity = Gravity.CENTER; setTextColor(t.knobText)
-        background = roundedRect(dp(12), t.knobBgTop, t.knobBorder, dp(1))
+        text = txt; textSize = 20f; setTypeface(null, Typeface.BOLD); gravity = Gravity.CENTER; setTextColor(t.knobText)
+        background = circleDrawable(t.knobBgTop, t.knobBorder, dp(2))
         setOnClickListener { onClick() }
     }
 
@@ -254,7 +281,9 @@ class MainActivity : Activity() {
         row.addView(knobButton(t, "‹") { selBand = (selBand - 1).coerceAtLeast(0); render() }, LinearLayout.LayoutParams(dp(48), dp(48)))
         val mid = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL; minimumWidth = dp(120) }
         mid.addView(label("BAND", 10f, t.mutedText, false))
-        mid.addView(label(labels[selBand] + " Hz", 22f, bandColor, true))
+        val freqTv = label(labels[selBand] + " Hz", 22f, bandColor, true)
+        eqFreqTv = freqTv
+        mid.addView(freqTv)
         row.addView(mid, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(10); rightMargin = dp(10) })
         row.addView(knobButton(t, "›") { selBand = (selBand + 1).coerceAtMost(14); render() }, LinearLayout.LayoutParams(dp(48), dp(48)))
 
@@ -263,7 +292,9 @@ class MainActivity : Activity() {
         row.addView(knobButton(t, "−") {
             st.bands[selBand] = (st.bands[selBand] - 0.5f).coerceIn(-12f, 12f); commit(); render()
         }, LinearLayout.LayoutParams(dp(56), dp(48)))
-        row.addView(label(fmtDb(st.bands[selBand]), 26f, t.text, true), LinearLayout.LayoutParams(dp(110), -2).apply { gravity = Gravity.CENTER })
+        val valueTv = label(fmtDb(st.bands[selBand]), 26f, t.text, true)
+        eqValueTv = valueTv
+        row.addView(valueTv, LinearLayout.LayoutParams(dp(110), -2).apply { gravity = Gravity.CENTER })
         row.addView(knobButton(t, "+") {
             st.bands[selBand] = (st.bands[selBand] + 0.5f).coerceIn(-12f, 12f); commit(); render()
         }, LinearLayout.LayoutParams(dp(56), dp(48)))
@@ -315,25 +346,35 @@ class MainActivity : Activity() {
         }
         val subHead = LinearLayout(this)
         subHead.addView(label("SUB LEVEL", 16f, Palette.SUB, true), LinearLayout.LayoutParams(0, -2, 1f))
-        subHead.addView(label(fmtDb(st.subLevel), 26f, t.text, true))
+        val subValueTv = label(fmtDb(st.subLevel), 26f, t.text, true)
+        subHead.addView(subValueTv)
         subCard.addView(subHead)
         subCard.addView(spacer(6))
+
+        fun liveSub(v: Float) {
+            st.subLevel = v.coerceIn(-12f, 12f)
+            AudioEngine.apply(st)
+            subValueTv.text = fmtDb(st.subLevel)
+            split.subLevel = st.subLevel
+        }
+        fun stepSub(delta: Float) { st.subLevel = (st.subLevel + delta).coerceIn(-12f, 12f); commit(); render() }
+
         val subSlideRow = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
-        subSlideRow.addView(knobButton(t, "−") { st.subLevel = (st.subLevel - 1f).coerceIn(-12f, 12f); commit(); render() }, LinearLayout.LayoutParams(dp(46), dp(46)))
+        subSlideRow.addView(knobButton(t, "−") { stepSub(-1f) }, LinearLayout.LayoutParams(dp(46), dp(46)))
         val subSeek = SeekBar(this).apply {
             max = 48; progress = ((st.subLevel + 12f) * 2f).toInt().coerceIn(0, 48)
             progressTintList = android.content.res.ColorStateList.valueOf(Palette.SUB)
             thumbTintList = android.content.res.ColorStateList.valueOf(Color.WHITE)
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                 override fun onProgressChanged(sb: SeekBar, p: Int, fromUser: Boolean) {
-                    if (fromUser) { st.subLevel = (p / 2f - 12f).coerceIn(-12f, 12f); commit(); render() }
+                    if (fromUser) liveSub(p / 2f - 12f)
                 }
                 override fun onStartTrackingTouch(sb: SeekBar) {}
-                override fun onStopTrackingTouch(sb: SeekBar) {}
+                override fun onStopTrackingTouch(sb: SeekBar) { st.save(this@MainActivity) }
             })
         }
         subSlideRow.addView(subSeek, LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = dp(8); rightMargin = dp(8) })
-        subSlideRow.addView(knobButton(t, "+") { st.subLevel = (st.subLevel + 1f).coerceIn(-12f, 12f); commit(); render() }, LinearLayout.LayoutParams(dp(46), dp(46)))
+        subSlideRow.addView(knobButton(t, "+") { stepSub(1f) }, LinearLayout.LayoutParams(dp(46), dp(46)))
         subCard.addView(subSlideRow)
         bottomRow.addView(subCard, LinearLayout.LayoutParams(0, -1, 1f).apply { rightMargin = dp(8) })
 
@@ -393,6 +434,13 @@ class MainActivity : Activity() {
     private fun roundedRect(radius: Int, fill: Int, stroke: Int, strokeW: Int): GradientDrawable =
         GradientDrawable().apply {
             cornerRadius = radius.toFloat()
+            setColor(fill)
+            if (strokeW > 0) setStroke(strokeW, stroke)
+        }
+
+    private fun circleDrawable(fill: Int, stroke: Int, strokeW: Int): GradientDrawable =
+        GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
             setColor(fill)
             if (strokeW > 0) setStroke(strokeW, stroke)
         }
