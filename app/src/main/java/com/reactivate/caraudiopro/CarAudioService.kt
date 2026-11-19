@@ -12,7 +12,7 @@ import android.media.audiofx.AudioEffect
 import android.os.Build
 import android.os.IBinder
 
-/** App screen band ho tab bhi processing chalti rahe. */
+/** App screen band ho tab bhi processing chalti rehti hai. */
 class CarAudioService : Service() {
 
     companion object {

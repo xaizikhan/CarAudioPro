@@ -7,10 +7,10 @@ android {
     compileSdk = 34
     defaultConfig {
         applicationId = "com.reactivate.caraudiopro"
-        minSdk = 28          // DynamicsProcessing API
-        targetSdk = 33       // Android 13
-        versionCode = 2
-        versionName = "0.2-poc"
+        minSdk = 28
+        targetSdk = 33
+        versionCode = 3
+        versionName = "1.0"
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
