@@ -61,7 +61,7 @@ class CarAudioService : Service() {
                 NotificationChannel("engine", "Audio Engine", NotificationManager.IMPORTANCE_LOW))
             Notification.Builder(this, "engine")
         } else @Suppress("DEPRECATION") Notification.Builder(this)
-        return b.setContentTitle("Car Audio Pro active")
+        return b.setContentTitle("Owais Car Audio Pro active")
             .setSmallIcon(android.R.drawable.ic_media_play).setOngoing(true).build()
     }
 

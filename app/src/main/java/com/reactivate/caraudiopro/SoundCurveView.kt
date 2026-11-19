@@ -33,6 +33,10 @@ class SoundCurveView(context: Context) : View(context) {
     var theme: ThemeColors = ThemeColors.DARK
         set(v) { field = v; invalidate() }
     var onBandTap: ((Int) -> Unit)? = null
+    /** Fired continuously while dragging: (bandIndex, newGainDb). Only used when [interactive] is true. */
+    var onBandDrag: ((Int, Float) -> Unit)? = null
+    /** Fired once when the drag ends (finger lifted) — the right moment to persist settings. */
+    var onBandDragEnd: (() -> Unit)? = null
 
     private val d = resources.displayMetrics.density
     private fun dp(v: Float) = v * d
@@ -136,11 +140,27 @@ class SoundCurveView(context: Context) : View(context) {
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (!interactive) return false
-        if (event.action == MotionEvent.ACTION_DOWN) {
-            val plotW = width - padL() - padR()
-            val idx = ((event.x - padL()) / (plotW / (n - 1))).roundToInt().coerceIn(0, n - 1)
-            onBandTap?.invoke(idx)
-            return true
+        val plotW = width - padL() - padR()
+        val plotH = height - padTop() - padBottom()
+        val idx = ((event.x - padL()) / (plotW / (n - 1))).roundToInt().coerceIn(0, n - 1)
+        when (event.action) {
+            MotionEvent.ACTION_DOWN -> {
+                parent?.requestDisallowInterceptTouchEvent(true)
+                onBandTap?.invoke(idx)
+                val g = ((padTop() + plotH / 2f - event.y) / (plotH / 2f) * 12f)
+                onBandDrag?.invoke(idx, g.coerceIn(-12f, 12f))
+                return true
+            }
+            MotionEvent.ACTION_MOVE -> {
+                val g = ((padTop() + plotH / 2f - event.y) / (plotH / 2f) * 12f)
+                onBandDrag?.invoke(idx, g.coerceIn(-12f, 12f))
+                return true
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                parent?.requestDisallowInterceptTouchEvent(false)
+                onBandDragEnd?.invoke()
+                return true
+            }
         }
         return false
     }
