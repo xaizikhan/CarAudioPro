@@ -2,16 +2,15 @@ package com.reactivate.caraudiopro
 
 import android.graphics.Color
 
-/** Same spectrum used in the approved design: bass=red, mids=green, treble=purple. */
+/** Soft pastel spectrum used by the sound curve: warm on the left, cool on the right. */
 object SpectrumColors {
-    private val stops = floatArrayOf(0f, 0.2f, 0.4f, 0.6f, 0.8f, 1f)
+    private val stops = floatArrayOf(0f, 0.3f, 0.55f, 0.8f, 1f)
     private val colors = intArrayOf(
-        Color.rgb(255, 59, 92),   // red
-        Color.rgb(255, 138, 61),  // orange
-        Color.rgb(255, 210, 61),  // yellow
-        Color.rgb(62, 217, 122),  // green
-        Color.rgb(34, 211, 238),  // cyan
-        Color.rgb(176, 124, 255)  // purple
+        Color.rgb(240, 138, 138), // soft red
+        Color.rgb(232, 181, 122), // soft amber
+        Color.rgb(134, 201, 154), // soft green
+        Color.rgb(127, 179, 222), // soft blue
+        Color.rgb(175, 155, 219)  // soft violet
     )
 
     fun colorsArray() = colors
