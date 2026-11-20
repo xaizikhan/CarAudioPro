@@ -52,7 +52,7 @@ class SoundCurveView(context: Context) : View(context) {
         xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN)
     }
     private val linePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE; strokeWidth = dp(3.2f); strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND
+        style = Paint.Style.STROKE; strokeWidth = dp(2.8f); strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND
     }
     private val dotFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val dotStroke = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
@@ -107,7 +107,7 @@ class SoundCurveView(context: Context) : View(context) {
         canvas.drawPath(areaPath, areaPaint)
         fadePaint.shader = LinearGradient(
             0f, padTop(), 0f, padTop() + plotH,
-            Color.argb(170, 255, 255, 255), Color.argb(0, 255, 255, 255), Shader.TileMode.CLAMP
+            Color.argb(78, 255, 255, 255), Color.argb(0, 255, 255, 255), Shader.TileMode.CLAMP
         )
         canvas.drawRect(padL(), padTop(), padL() + plotW, padTop() + plotH, fadePaint)
         canvas.restoreToCount(layer)
@@ -129,7 +129,7 @@ class SoundCurveView(context: Context) : View(context) {
             val r = if (isSel) dp(12f) else dp(6f)
             dotFill.color = if (isSel) Color.WHITE else theme.dotHole
             canvas.drawCircle(xs[i], ys[i], r, dotFill)
-            dotStroke.color = bc; dotStroke.strokeWidth = dp(2.4f)
+            dotStroke.color = bc; dotStroke.strokeWidth = dp(2.2f)
             canvas.drawCircle(xs[i], ys[i], r, dotStroke)
 
             text.textSize = dp(11f)
