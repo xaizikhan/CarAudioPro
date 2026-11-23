@@ -24,6 +24,8 @@ class MainActivity : Activity() {
     private var liveDot: View? = null
     private var curveView: SoundCurveView? = null
     private var eqValueTv: TextView? = null
+    private var headroomBar: BarView? = null
+    private var headroomValueTv: TextView? = null
     private var eqFreqTv: TextView? = null
     private var tab = "easy"           // easy | eq | sub | setup
     private var selBand = 2
@@ -58,11 +60,20 @@ class MainActivity : Activity() {
         handler.post(liveTicker)
     }
 
-    override fun onPause() { ToneGenerator.stop(); super.onPause() }
-
-    override fun onDestroy() { handler.removeCallbacks(liveTicker); ToneGenerator.stop(); super.onDestroy() }
+    override fun onDestroy() { handler.removeCallbacks(liveTicker); super.onDestroy() }
 
     private fun commit() { st.save(this); AudioEngine.apply(st) }
+
+    /** Keeps the headroom meter in sync on every drag tick, without rebuilding the screen. */
+    private fun updateHeadroomLive() {
+        val mb = maxBoost()
+        val color = if (mb >= 9f) Palette.DANGER else if (mb >= 5f) Palette.WARN else Palette.OK
+        headroomBar?.apply { fraction = (mb / 12f).coerceIn(0f, 1f); barColor = color }
+        headroomValueTv?.apply {
+            text = "%.1f dB".format(AudioEngine.headroom(st))
+            setTextColor(color)
+        }
+    }
 
     /**
      * Rebuilds the screen from current state. Everything below the header is
@@ -178,13 +189,16 @@ class MainActivity : Activity() {
         }
         row.addView(label("HEADROOM", 10f, t.mutedText, false),
             LinearLayout.LayoutParams(dp(68), -2))
-        row.addView(BarView(this).apply {
+        val bar = BarView(this).apply {
             fraction = (mb / 12f).coerceIn(0f, 1f)
             barColor = color
             trackColor = t.track
-        }, LinearLayout.LayoutParams(0, dp(6), 1f).apply { rightMargin = dp(12) })
-        row.addView(label("%.1f dB".format(AudioEngine.headroom(st)), 12f, color, true),
-            LinearLayout.LayoutParams(dp(56), -2).apply { rightMargin = dp(12) })
+        }
+        headroomBar = bar
+        row.addView(bar, LinearLayout.LayoutParams(0, dp(6), 1f).apply { rightMargin = dp(12) })
+        val valueTv = label("%.1f dB".format(AudioEngine.headroom(st)), 12f, color, true)
+        headroomValueTv = valueTv
+        row.addView(valueTv, LinearLayout.LayoutParams(dp(56), -2).apply { rightMargin = dp(12) })
         row.addView(label(
             if (mb >= 9f) "Very high boost - keep the volume down"
             else if (mb >= 5f) "Fine, but watch out at high volume"
@@ -260,8 +274,9 @@ class MainActivity : Activity() {
                 curveView?.let { sv -> sv.bands = st.bands; sv.selected = i }
                 eqValueTv?.text = fmtDb(rv)
                 eqFreqTv?.let { tv -> tv.text = FREQ_LABELS[i] + " Hz"; tv.setTextColor(SpectrumColors.at(i / 14f)) }
+                updateHeadroomLive()
             }
-            onBandDragEnd = { st.save(this@MainActivity) }
+            onBandDragEnd = { st.save(this@MainActivity); render() }
         }
         curveView = curve
         panel.addView(curve, LinearLayout.LayoutParams(-1, 0, 1f))
@@ -355,6 +370,7 @@ class MainActivity : Activity() {
             AudioEngine.apply(st)
             valueTv.text = fmtDb(avg(w))
             curveView?.let { it.bands = st.bands }
+            updateHeadroomLive()
         }
         fun shiftStep(w: FloatArray, delta: Float) {
             for (i in 0 until 15) if (w[i] > 0f) st.bands[i] = (st.bands[i] + delta * w[i]).coerceIn(-12f, 12f)
@@ -366,19 +382,19 @@ class MainActivity : Activity() {
         row.addView(knobCard(t, "Bass", "Deep & Powerful", IconKind.BASS, avg(W_BASS), bassValue,
             minus = { shiftStep(W_BASS, -1f) }, plus = { shiftStep(W_BASS, 1f) },
             onSlide = { v -> shiftLive(W_BASS, v - avg(W_BASS), bassValue) },
-            onSlideEnd = { st.save(this) }), LinearLayout.LayoutParams(0, -2, 1f).apply { rightMargin = dp(8) })
+            onSlideEnd = { st.save(this); render() }), LinearLayout.LayoutParams(0, -2, 1f).apply { rightMargin = dp(8) })
 
         val midValue = TextView(this)
         row.addView(knobCard(t, "Mid", "Clear & Balanced", IconKind.MID, avg(W_MID), midValue,
             minus = { shiftStep(W_MID, -1f) }, plus = { shiftStep(W_MID, 1f) },
             onSlide = { v -> shiftLive(W_MID, v - avg(W_MID), midValue) },
-            onSlideEnd = { st.save(this) }), LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = dp(4); rightMargin = dp(4) })
+            onSlideEnd = { st.save(this); render() }), LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = dp(4); rightMargin = dp(4) })
 
         val trebleValue = TextView(this)
         row.addView(knobCard(t, "Treble", "Crisp & Detailed", IconKind.TREBLE, avg(W_TREBLE), trebleValue,
             minus = { shiftStep(W_TREBLE, -1f) }, plus = { shiftStep(W_TREBLE, 1f) },
             onSlide = { v -> shiftLive(W_TREBLE, v - avg(W_TREBLE), trebleValue) },
-            onSlideEnd = { st.save(this) }), LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = dp(8) })
+            onSlideEnd = { st.save(this); render() }), LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = dp(8) })
         return row
     }
 
@@ -536,6 +552,7 @@ class MainActivity : Activity() {
             AudioEngine.apply(st)
             subValueTv.text = fmtDb(st.subLevel)
             split.subLevel = st.subLevel
+            updateHeadroomLive()
         }
         fun stepSub(delta: Float) { st.subLevel = (st.subLevel + delta).coerceIn(-12f, 12f); st.dirty = true; commit(); render() }
 
@@ -549,7 +566,7 @@ class MainActivity : Activity() {
                     if (fromUser) liveSub(p / 2f - 12f)
                 }
                 override fun onStartTrackingTouch(sb: SeekBar) {}
-                override fun onStopTrackingTouch(sb: SeekBar) { st.save(this@MainActivity) }
+                override fun onStopTrackingTouch(sb: SeekBar) { st.save(this@MainActivity); render() }
             })
         }
         subSlideRow.addView(subSeek, LinearLayout.LayoutParams(0, dp(44), 1f).apply { leftMargin = dp(10); rightMargin = dp(10) })
@@ -612,28 +629,8 @@ class MainActivity : Activity() {
         col.addView(statusCard)
         col.addView(spacer(12))
 
-        // --- channel test + amp gain guide ---
+        // --- ambience on its own, full-width row ---
         val row1 = LinearLayout(this)
-
-        val testCard = card(t)
-        testCard.addView(label("Channel Test", 16f, t.text, true))
-        testCard.addView(label("Confirms the wiring and which side is which", 11f, t.mutedText, false))
-        testCard.addView(spacer(10))
-        val testGrid = LinearLayout(this)
-        listOf("left" to "Left Only", "right" to "Right Only").forEach { (side, lbl) ->
-            testGrid.addView(pillChip(lbl, ToneGenerator.playing == side, Palette.ACCENT, Palette.ACCENT_DEEP, t) {
-                if (ToneGenerator.playing == side) ToneGenerator.stop()
-                else ToneGenerator.play(side) { handler.post { if (tab == "setup") render() } }
-                render()
-            }, LinearLayout.LayoutParams(0, dp(46), 1f).apply { setMargins(dp(3), 0, dp(3), 0) })
-        }
-        testCard.addView(testGrid)
-        testCard.addView(spacer(8))
-        testCard.addView(label(
-            if (ToneGenerator.playing != null) "Playing - stops by itself in a few seconds"
-            else "A soft 440 Hz tone on one side, at a safe level",
-            11f, if (ToneGenerator.playing != null) Palette.ACCENT else t.mutedText, false))
-        row1.addView(testCard, LinearLayout.LayoutParams(0, -1, 1f).apply { rightMargin = dp(7) })
 
         val ambCard = card(t)
         val ambHead = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
@@ -656,12 +653,11 @@ class MainActivity : Activity() {
         ambCard.addView(label(
             "A car cabin already has its own reflections, so these often blur vocals and bass. Worth a listen, but Off suits most music.",
             11f, t.mutedText, false).apply { setLineSpacing(dpf(3f), 1f) })
-        row1.addView(ambCard, LinearLayout.LayoutParams(0, -1, 1f).apply { leftMargin = dp(7) })
-
+        row1.addView(ambCard, LinearLayout.LayoutParams(-1, -1))
         col.addView(row1, LinearLayout.LayoutParams(-1, 0, 1f))
         col.addView(spacer(12))
 
-        // --- loudness / balance / high-pass, one compact row ---
+        // --- loudness / balance / high-pass, back on their own row below ambience ---
         val row2 = LinearLayout(this)
 
         val loudCard = card(t)
@@ -687,25 +683,30 @@ class MainActivity : Activity() {
         balCard.addView(spacer(8))
 
         val balRow = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
-        balRow.addView(sideTag(t, "L", "Driver", st.balance < 0),
-            LinearLayout.LayoutParams(dp(50), -2).apply { rightMargin = dp(8) })
+        // Both tags are created before the track, so the drag handler below
+        // can reach both update functions.
+        val (leftTagView, updateLeftTag) = sideTag(t, "L", "Driver", st.balance < 0)
+        val (rightTagView, updateRightTag) = sideTag(t, "R", "Passenger", st.balance > 0)
         val balTrack = BalanceTrackView(this).apply {
             value = st.balance; trackColor = t.track; markColor = t.panelBorder
-            onValueChange = { v ->
-                st.balance = v
-                AudioEngine.apply(st)
-                balHeadWord.text = if (v == 0) "Both sides equal"
-                    else if (v < 0) "Louder on the left" else "Louder on the right"
-            }
             onValueChangeEnd = { st.save(this@MainActivity); render() }
         }
-        balRow.addView(balTrack, LinearLayout.LayoutParams(0, dp(40), 1f))
-        balRow.addView(sideTag(t, "R", "Passenger", st.balance > 0),
-            LinearLayout.LayoutParams(dp(50), -2).apply { leftMargin = dp(8) })
-        balRow.addView(pillChip("CENTER", false, Palette.ACCENT, Palette.ACCENT_DEEP, t) {
+        val centerBtn = pillChip("CENTER", false, Palette.ACCENT, Palette.ACCENT_DEEP, t) {
             st.balance = 0; commit(); render()
-        }.apply { alpha = if (st.balance == 0) 0.45f else 1f },
-            LinearLayout.LayoutParams(dp(74), dp(36)).apply { leftMargin = dp(8) })
+        }.apply { alpha = if (st.balance == 0) 0.45f else 1f }
+        balTrack.onValueChange = { v ->
+            st.balance = v
+            AudioEngine.apply(st)
+            balHeadWord.text = if (v == 0) "Both sides equal"
+                else if (v < 0) "Louder on the left" else "Louder on the right"
+            updateLeftTag(v < 0)
+            updateRightTag(v > 0)
+            centerBtn.alpha = if (v == 0) 0.45f else 1f
+        }
+        balRow.addView(leftTagView, LinearLayout.LayoutParams(dp(50), -2).apply { rightMargin = dp(8) })
+        balRow.addView(balTrack, LinearLayout.LayoutParams(0, dp(40), 1f))
+        balRow.addView(rightTagView, LinearLayout.LayoutParams(dp(50), -2).apply { leftMargin = dp(8) })
+        balRow.addView(centerBtn, LinearLayout.LayoutParams(dp(74), dp(36)).apply { leftMargin = dp(8) })
         balCard.addView(balRow)
         row2.addView(balCard, LinearLayout.LayoutParams(0, -1, 1.3f).apply { leftMargin = dp(7); rightMargin = dp(7) })
 
@@ -746,7 +747,14 @@ class MainActivity : Activity() {
         gravity = Gravity.CENTER_VERTICAL
     }
 
-    private fun sideTag(t: ThemeColors, letter: String, who: String, active: Boolean): View {
+    /**
+     * Returns the L/R tag view plus a function to flip its highlight on the fly —
+     * used so the Balance track can light up the right side while dragging,
+     * not only after the finger lifts.
+     */
+    private fun sideTag(t: ThemeColors, letter: String, who: String, active: Boolean): Pair<View, (Boolean) -> Unit> {
+        val letterTv = label(letter, 19f, if (active) Color.WHITE else t.mutedText, true).apply { gravity = Gravity.CENTER }
+        val whoTv = label(who, 10f, if (active) Color.WHITE else t.mutedText, false).apply { gravity = Gravity.CENTER }
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
@@ -754,9 +762,15 @@ class MainActivity : Activity() {
             background = if (active) pillGradient(Palette.ACCENT, Palette.ACCENT_DEEP, Palette.ACCENT, dp(12))
                 else GradientDrawable().apply { cornerRadius = dpf(12f); setColor(Color.TRANSPARENT) }
         }
-        box.addView(label(letter, 19f, if (active) Color.WHITE else t.mutedText, true).apply { gravity = Gravity.CENTER })
-        box.addView(label(who, 10f, if (active) Color.WHITE else t.mutedText, false).apply { gravity = Gravity.CENTER })
-        return box
+        box.addView(letterTv)
+        box.addView(whoTv)
+        val update: (Boolean) -> Unit = { on ->
+            box.background = if (on) pillGradient(Palette.ACCENT, Palette.ACCENT_DEEP, Palette.ACCENT, dp(12))
+                else GradientDrawable().apply { cornerRadius = dpf(12f); setColor(Color.TRANSPARENT) }
+            val col = if (on) Color.WHITE else t.mutedText
+            letterTv.setTextColor(col); whoTv.setTextColor(col)
+        }
+        return box to update
     }
 
     private fun toggleSwitch(t: ThemeColors, on: Boolean, onClick: () -> Unit): View {

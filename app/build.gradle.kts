@@ -9,8 +9,8 @@ android {
         applicationId = "com.reactivate.caraudiopro"
         minSdk = 28
         targetSdk = 33
-        versionCode = 9
-        versionName = "4.1"
+        versionCode = 13
+        versionName = "4.5"
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
