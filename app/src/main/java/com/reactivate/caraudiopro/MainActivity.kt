@@ -58,7 +58,9 @@ class MainActivity : Activity() {
         handler.post(liveTicker)
     }
 
-    override fun onDestroy() { handler.removeCallbacks(liveTicker); super.onDestroy() }
+    override fun onPause() { ToneGenerator.stop(); super.onPause() }
+
+    override fun onDestroy() { handler.removeCallbacks(liveTicker); ToneGenerator.stop(); super.onDestroy() }
 
     private fun commit() { st.save(this); AudioEngine.apply(st) }
 
@@ -77,10 +79,12 @@ class MainActivity : Activity() {
         setContentView(root)
 
         root.addView(buildHeader(t))
-        root.addView(spacer(10))
+        root.addView(spacer(8))
+        root.addView(buildHeadroomMeter(t))
+        root.addView(spacer(8))
 
         if (tab == "easy" || tab == "eq") {
-            root.addView(buildGraphPanel(t), LinearLayout.LayoutParams(-1, 0, 1f))
+            root.addView(buildGraphPanel(t), LinearLayout.LayoutParams(-1, graphPanelHeight()))
             root.addView(spacer(10))
         }
 
@@ -91,9 +95,21 @@ class MainActivity : Activity() {
                 root.addView(buildEasyTab(t))
             }
             "eq" -> root.addView(buildEqTab(t))
-            "sub" -> root.addView(buildSubTab(t), LinearLayout.LayoutParams(-1, 0, 1f))
-            "setup" -> root.addView(buildSetupTab(t), LinearLayout.LayoutParams(-1, 0, 1f))
+            "sub" -> root.addView(buildSubTab(t), LinearLayout.LayoutParams(-1, -1))
+            "setup" -> root.addView(buildSetupTab(t), LinearLayout.LayoutParams(-1, -1))
         }
+    }
+
+    /**
+     * Height for the curve panel, measured from the screen rather than fixed in
+     * dp: the rows under it are wrap-content, so the graph takes what is left
+     * over, with a floor so it can never measure to nothing.
+     */
+    private fun graphPanelHeight(): Int {
+        val screenH = resources.displayMetrics.heightPixels
+        val below = if (tab == "eq") dp(90) else dp(230)   // eq row, or presets + cards
+        val chrome = dp(108)                                // header + headroom meter + spacers
+        return (screenH - below - chrome).coerceAtLeast(dp(140))
     }
 
     private fun spacer(h: Int) = View(this).apply { layoutParams = LinearLayout.LayoutParams(-1, dp(h)) }
@@ -113,14 +129,19 @@ class MainActivity : Activity() {
         row.addView(title)
 
         val pill = LinearLayout(this).apply {
-            background = pillGradient(t.pillBgTop, t.pillBgBottom, t.panelBorder, dp(22))
-            setPadding(dp(4), dp(4), dp(4), dp(4))
+            background = flatPillGradient(t.pillBgTop, t.pillBgBottom, dp(22))
+            setPadding(dp(5), dp(5), dp(5), dp(5))
         }
-        listOf("easy" to "CUSTOM", "eq" to "EQUALIZER", "sub" to "SUBWOOFER", "setup" to "SETUP").forEach { (id, lbl) ->
-            pill.addView(tabChip(lbl, tab == id, t) { tab = id; render() },
-                LinearLayout.LayoutParams(0, dp(40), 1f).apply { setMargins(dp(2), 0, dp(2), 0) })
+        listOf(
+            Triple("easy", "CUSTOM", IconKind.TAB_EQ),
+            Triple("eq", "EQUALIZER", IconKind.TAB_BAND),
+            Triple("sub", "SUBWOOFER", IconKind.TAB_SUB),
+            Triple("setup", "SETUP", IconKind.TAB_CFG)
+        ).forEach { (id, lbl, icon) ->
+            pill.addView(tabChip(lbl, icon, tab == id, t) { tab = id; render() },
+                LinearLayout.LayoutParams(0, dp(44), 1f).apply { setMargins(dp(3), 0, dp(3), 0) })
         }
-        row.addView(pill, LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = dp(14); rightMargin = dp(14) })
+        row.addView(pill, LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = dp(16); rightMargin = dp(16) })
 
         val live = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
         val dot = View(this).apply {
@@ -132,36 +153,86 @@ class MainActivity : Activity() {
         live.addView(label("LIVE", 11f, t.mutedText, false))
         row.addView(live, LinearLayout.LayoutParams(-2, -2).apply { rightMargin = dp(10) })
 
-        row.addView(roundIconButton(t, "i", t.knobText) { showDiagnostics() },
-            LinearLayout.LayoutParams(dp(42), dp(42)).apply { rightMargin = dp(8) })
 
-        row.addView(roundIconButton(t, if (st.theme == "light") "\u263E" else "\u2600", t.knobText) {
+        row.addView(roundIconButton(t, if (st.theme == "light") IconKind.MOON else IconKind.SUN, t.knobText) {
             st.theme = if (st.theme == "light") "dark" else "light"; st.save(this@MainActivity); render()
-        }, LinearLayout.LayoutParams(dp(42), dp(42)).apply { rightMargin = dp(8) })
+        }, LinearLayout.LayoutParams(dp(40), dp(40)).apply { rightMargin = dp(8) })
 
         val powerOn = st.enabled
         row.addView(powerButton(t, powerOn) { st.enabled = !st.enabled; commit(); render() },
-            LinearLayout.LayoutParams(dp(42), dp(42)))
+            LinearLayout.LayoutParams(dp(40), dp(40)))
 
         return row
     }
 
-    private fun roundIconButton(t: ThemeColors, txt: String, color: Int, onClick: () -> Unit) = TextView(this).apply {
-        text = txt; textSize = 16f; gravity = Gravity.CENTER
-        setTypeface(null, Typeface.BOLD)
-        setTextColor(color)
-        background = circleGradient(t.knobBgTop, t.knobBgBottom, t.knobBorder)
-        elevation = dpf(3f)
-        setOnClickListener { onClick() }
+    /**
+     * Headroom as a slim meter under the header: it changes with every band the
+     * user moves, and it explains why a heavily boosted curve plays quieter.
+     */
+    private fun buildHeadroomMeter(t: ThemeColors): View {
+        val mb = maxBoost()
+        val color = if (mb >= 9f) Palette.DANGER else if (mb >= 5f) Palette.WARN else Palette.OK
+        val row = LinearLayout(this).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            setOnClickListener { showHeadroomInfo() }
+        }
+        row.addView(label("HEADROOM", 10f, t.mutedText, false),
+            LinearLayout.LayoutParams(dp(68), -2))
+        row.addView(BarView(this).apply {
+            fraction = (mb / 12f).coerceIn(0f, 1f)
+            barColor = color
+            trackColor = t.track
+        }, LinearLayout.LayoutParams(0, dp(6), 1f).apply { rightMargin = dp(12) })
+        row.addView(label("%.1f dB".format(AudioEngine.headroom(st)), 12f, color, true),
+            LinearLayout.LayoutParams(dp(56), -2).apply { rightMargin = dp(12) })
+        row.addView(label(
+            if (mb >= 9f) "Very high boost - keep the volume down"
+            else if (mb >= 5f) "Fine, but watch out at high volume"
+            else "Safe - no risk of clipping",
+            11f, t.mutedText, false))
+        return row
     }
 
-    private fun powerButton(t: ThemeColors, on: Boolean, onClick: () -> Unit) = TextView(this).apply {
-        text = "\u23FB"; textSize = 17f; gravity = Gravity.CENTER
-        setTextColor(if (on) Palette.ACCENT else t.knobText)
-        background = circleGradient(t.knobBgTop, t.knobBgBottom, if (on) Palette.ACCENT else t.knobBorder)
-        elevation = dpf(3f)
-        setOnClickListener { onClick() }
+    private fun showHeadroomInfo() {
+        val mb = maxBoost()
+        val msg = buildString {
+            append("Headroom: %.1f dB\n\n".format(AudioEngine.headroom(st)))
+            append("Boosting a band makes the signal bigger. Past the digital ceiling the ")
+            append("waveform gets clipped, which sounds like crackle and is hard on tweeters.\n\n")
+            append("So the app turns the input down first, by half of your biggest boost. ")
+            append("That is why a heavily boosted curve plays quieter — raise the head unit ")
+            append("volume to make it up.\n\n")
+            append("Biggest boost right now: %.1f dB\n".format(mb))
+            append(if (mb >= 9f) "Very high — keep the volume down or it may clip."
+                else if (mb >= 5f) "Fine, but watch out at high volume."
+                else "Safe — no risk of clipping.")
+            append("\n\nTip: to shape the sound without losing any headroom, cut the bands ")
+            append("you want less of instead of boosting the ones you want more of.")
+        }
+        AlertDialog.Builder(this).setTitle("Headroom").setMessage(msg)
+            .setPositiveButton("OK", null).show()
     }
+
+    private fun roundIconButton(t: ThemeColors, kind: IconKind, color: Int, onClick: () -> Unit) =
+        BandIconView(this, kind).apply {
+            iconColor = color
+            scale = 0.5f
+            background = flatCircleGradient(t.knobBgTop, t.knobBgBottom)
+            elevation = dpf(3f)
+            isClickable = true
+            setOnClickListener { onClick() }
+        }
+
+    private fun powerButton(t: ThemeColors, on: Boolean, onClick: () -> Unit) =
+        BandIconView(this, IconKind.POWER).apply {
+            iconColor = if (on) Palette.ACCENT else t.knobText
+            scale = 0.5f
+            background = if (on) circleGradient(t.knobBgTop, t.knobBgBottom, Palette.ACCENT)
+                else flatCircleGradient(t.knobBgTop, t.knobBgBottom)
+            elevation = dpf(3f)
+            isClickable = true
+            setOnClickListener { onClick() }
+        }
 
     // ---------- sound curve panel (CUSTOM + EQUALIZER) ----------
     private fun buildGraphPanel(t: ThemeColors): View {
@@ -184,7 +255,7 @@ class MainActivity : Activity() {
                 val rv = (Math.round(v * 2f) / 2f).coerceIn(-12f, 12f)
                 st.bands[i] = rv
                 selBand = i
-                st.preset = -1
+                st.dirty = true
                 AudioEngine.apply(st)
                 curveView?.let { sv -> sv.bands = st.bands; sv.selected = i }
                 eqValueTv?.text = fmtDb(rv)
@@ -198,18 +269,73 @@ class MainActivity : Activity() {
     }
 
     // ---------- preset row (CUSTOM tab) ----------
+    /**
+     * A slot shows the user's own saved version when there is one, otherwise the
+     * factory curve. Editing marks the current slot dirty; nothing is written to
+     * that slot until SAVE. RESET discards the saved version and goes back to
+     * the factory curve for the slot currently selected.
+     */
     private fun buildPresetRow(t: ThemeColors): View {
         val row = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
         row.addView(label("PRESETS", 11f, t.mutedText, false),
             LinearLayout.LayoutParams(dp(64), -2))
-        AudioSettings.PRESETS.forEachIndexed { i, (name, data) ->
-            row.addView(pillChip(name, st.preset == i, Palette.ACCENT, Palette.ACCENT_DEEP, t) {
-                st.bands = data.first.copyOf()
-                st.subLevel = data.second
-                st.preset = i
-                commit(); render()
-            }, LinearLayout.LayoutParams(0, dp(46), 1f).apply { setMargins(dp(4), 0, dp(4), 0) })
+
+        AudioSettings.PRESETS.forEachIndexed { i, (name, _) ->
+            val active = st.preset == i
+            val edited = st.savedSlots[i] != null
+            val unsaved = active && st.dirty
+            val chip = TextView(this).apply {
+                text = name; textSize = 13f; setTypeface(null, Typeface.BOLD); gravity = Gravity.CENTER
+                setTextColor(if (active) Color.WHITE else t.knobText)
+                background = if (active) pillGradient(Palette.ACCENT, Palette.ACCENT_DEEP, Palette.ACCENT, dp(12))
+                    else flatPillGradient(t.knobBgTop, t.knobBgBottom, dp(12))
+                elevation = dpf(3f)
+                setOnClickListener {
+                    val (bands, sub) = AudioSettings.slotCurve(st, i)
+                    st.bands = bands.copyOf(); st.subLevel = sub; st.preset = i; st.dirty = false
+                    commit(); render()
+                }
+            }
+            val wrap = android.widget.FrameLayout(this)
+            wrap.addView(chip, android.widget.FrameLayout.LayoutParams(-1, -1))
+            if (unsaved || edited) {
+                wrap.addView(View(this).apply {
+                    background = GradientDrawable().apply {
+                        shape = GradientDrawable.OVAL
+                        setColor(if (unsaved) Palette.WARN else if (active) Color.WHITE else Palette.ACCENT)
+                    }
+                }, android.widget.FrameLayout.LayoutParams(dp(7), dp(7)).apply {
+                    gravity = Gravity.TOP or Gravity.END; topMargin = dp(9); rightMargin = dp(10)
+                })
+            }
+            row.addView(wrap, LinearLayout.LayoutParams(0, dp(46), 1f).apply { setMargins(dp(4), 0, dp(4), 0) })
         }
+
+        row.addView(View(this).apply { setBackgroundColor(t.panelBorder) },
+            LinearLayout.LayoutParams(dp(1), dp(28)).apply { leftMargin = dp(6); rightMargin = dp(8) })
+
+        row.addView(TextView(this).apply {
+            text = if (st.dirty) "SAVE •" else "SAVE"
+            textSize = 11f; setTypeface(null, Typeface.BOLD); gravity = Gravity.CENTER
+            setTextColor(if (st.dirty) Color.parseColor("#0E1A12") else t.knobText)
+            background = if (st.dirty) pillGradient(Color.parseColor("#86C99A"), Color.parseColor("#4E8C62"), Color.parseColor("#86C99A"), dp(12))
+                else flatPillGradient(t.knobBgTop, t.knobBgBottom, dp(12)).apply { alpha = 140 }
+            elevation = dpf(3f)
+            setOnClickListener {
+                if (!st.dirty) return@setOnClickListener
+                st.savedSlots[st.preset] = SavedSlot(st.bands.copyOf(), st.subLevel)
+                st.dirty = false
+                commit(); render()
+            }
+        }, LinearLayout.LayoutParams(dp(78), dp(46)).apply { rightMargin = dp(6) })
+
+        row.addView(pillChip("RESET", false, Palette.ACCENT, Palette.ACCENT_DEEP, t) {
+            st.savedSlots[st.preset] = null
+            val (bands, sub) = AudioSettings.PRESETS[st.preset].second
+            st.bands = bands.copyOf(); st.subLevel = sub; st.dirty = false
+            commit(); render()
+        }, LinearLayout.LayoutParams(dp(78), dp(46)))
+
         return row
     }
 
@@ -225,14 +351,14 @@ class MainActivity : Activity() {
         // Live while dragging: engine + numbers update instantly, no full rebuild per tick.
         fun shiftLive(w: FloatArray, delta: Float, valueTv: TextView) {
             for (i in 0 until 15) if (w[i] > 0f) st.bands[i] = (st.bands[i] + delta * w[i]).coerceIn(-12f, 12f)
-            st.preset = -1
+            st.dirty = true
             AudioEngine.apply(st)
             valueTv.text = fmtDb(avg(w))
             curveView?.let { it.bands = st.bands }
         }
         fun shiftStep(w: FloatArray, delta: Float) {
             for (i in 0 until 15) if (w[i] > 0f) st.bands[i] = (st.bands[i] + delta * w[i]).coerceIn(-12f, 12f)
-            st.preset = -1
+            st.dirty = true
             commit(); render()
         }
 
@@ -262,13 +388,13 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             background = panelBg(t)
             elevation = dpf(4f)
-            setPadding(dp(16), dp(14), dp(16), dp(14))
+            setPadding(dp(18), dp(16), dp(18), dp(16))
         }
 
         val head = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
         head.addView(BandIconView(this, icon).apply {
             iconColor = t.knobText
-            background = circleGradient(t.knobBgTop, t.knobBgBottom, t.knobBorder)
+            background = flatCircleGradient(t.knobBgTop, t.knobBgBottom)
             elevation = dpf(3f)
         }, LinearLayout.LayoutParams(dp(42), dp(42)).apply { rightMargin = dp(12) })
 
@@ -283,7 +409,7 @@ class MainActivity : Activity() {
         card.addView(spacer(10))
 
         val sliderRow = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
-        sliderRow.addView(knobButton(t, "\u2212") { minus() }, LinearLayout.LayoutParams(dp(48), dp(48)))
+        sliderRow.addView(iconKnob(t, IconKind.MINUS) { minus() }, LinearLayout.LayoutParams(dp(48), dp(48)))
         val seek = SeekBar(this).apply {
             max = 48
             progress = ((value + 12f) * 2f).toInt().coerceIn(0, 48)
@@ -296,19 +422,25 @@ class MainActivity : Activity() {
                 override fun onStopTrackingTouch(sb: SeekBar) { onSlideEnd() }
             })
         }
-        sliderRow.addView(seek, LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = dp(10); rightMargin = dp(10) })
-        sliderRow.addView(knobButton(t, "+") { plus() }, LinearLayout.LayoutParams(dp(48), dp(48)))
+        sliderRow.addView(seek, LinearLayout.LayoutParams(0, dp(44), 1f).apply { leftMargin = dp(10); rightMargin = dp(10) })
+        sliderRow.addView(iconKnob(t, IconKind.PLUS) { plus() }, LinearLayout.LayoutParams(dp(48), dp(48)))
         card.addView(sliderRow)
         return card
     }
 
-    private fun knobButton(t: ThemeColors, txt: String, onClick: () -> Unit) = TextView(this).apply {
-        text = txt; textSize = 20f; setTypeface(null, Typeface.BOLD); gravity = Gravity.CENTER
-        setTextColor(t.knobText)
-        background = circleGradient(t.knobBgTop, t.knobBgBottom, t.knobBorder)
-        elevation = dpf(3f)
-        setOnClickListener { onClick() }
-    }
+    /**
+     * Round buttons draw their own icon. Head-unit firmware often ships a font
+     * with no glyph for characters like U+23FB, which showed up as a blank.
+     */
+    private fun iconKnob(t: ThemeColors, kind: IconKind, onClick: () -> Unit) =
+        BandIconView(this, kind).apply {
+            iconColor = t.knobText
+            scale = 0.46f
+            background = flatCircleGradient(t.knobBgTop, t.knobBgBottom)
+            elevation = dpf(3f)
+            isClickable = true
+            setOnClickListener { onClick() }
+        }
 
     // ---------- EQUALIZER tab ----------
     private fun buildEqTab(t: ThemeColors): View {
@@ -320,7 +452,7 @@ class MainActivity : Activity() {
         }
         val bandColor = SpectrumColors.at(selBand / 14f)
 
-        row.addView(knobButton(t, "\u2039") { selBand = (selBand - 1).coerceAtLeast(0); render() },
+        row.addView(iconKnob(t, IconKind.CHEVRON_LEFT) { selBand = (selBand - 1).coerceAtLeast(0); render() },
             LinearLayout.LayoutParams(dp(48), dp(48)))
         val mid = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_HORIZONTAL; minimumWidth = dp(110)
@@ -330,26 +462,26 @@ class MainActivity : Activity() {
         eqFreqTv = freqTv
         mid.addView(freqTv)
         row.addView(mid, LinearLayout.LayoutParams(-2, -2).apply { leftMargin = dp(8); rightMargin = dp(8) })
-        row.addView(knobButton(t, "\u203A") { selBand = (selBand + 1).coerceAtMost(14); render() },
+        row.addView(iconKnob(t, IconKind.CHEVRON_RIGHT) { selBand = (selBand + 1).coerceAtMost(14); render() },
             LinearLayout.LayoutParams(dp(48), dp(48)))
 
         row.addView(View(this).apply { setBackgroundColor(t.panelBorder) },
             LinearLayout.LayoutParams(dp(1), dp(36)).apply { leftMargin = dp(12); rightMargin = dp(12) })
 
-        row.addView(knobButton(t, "\u2212") {
-            st.bands[selBand] = (st.bands[selBand] - 0.5f).coerceIn(-12f, 12f); st.preset = -1; commit(); render()
+        row.addView(iconKnob(t, IconKind.MINUS) {
+            st.bands[selBand] = (st.bands[selBand] - 0.5f).coerceIn(-12f, 12f); st.dirty = true; commit(); render()
         }, LinearLayout.LayoutParams(dp(48), dp(48)))
         val valueTv = label(fmtDb(st.bands[selBand]), 24f, t.text, true).apply { gravity = Gravity.CENTER }
         eqValueTv = valueTv
         row.addView(valueTv, LinearLayout.LayoutParams(dp(110), -2))
-        row.addView(knobButton(t, "+") {
-            st.bands[selBand] = (st.bands[selBand] + 0.5f).coerceIn(-12f, 12f); st.preset = -1; commit(); render()
+        row.addView(iconKnob(t, IconKind.PLUS) {
+            st.bands[selBand] = (st.bands[selBand] + 0.5f).coerceIn(-12f, 12f); st.dirty = true; commit(); render()
         }, LinearLayout.LayoutParams(dp(48), dp(48)))
 
         row.addView(View(this), LinearLayout.LayoutParams(0, -2, 1f))
         row.addView(pillChip("FLAT", false, Palette.ACCENT, Palette.ACCENT_DEEP, t) {
             for (i in 0 until 15) st.bands[i] = 0f
-            st.preset = -1
+            st.dirty = true
             commit(); render()
         }, LinearLayout.LayoutParams(dp(96), dp(48)))
         return row
@@ -368,16 +500,17 @@ class MainActivity : Activity() {
         val head = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
         head.addView(label("Speakers + Subwoofer Split", 16f, t.headText, true), LinearLayout.LayoutParams(0, -2, 1f))
         val legend = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
-        legend.addView(label("\u25A0", 11f, Palette.SUB, true))
-        legend.addView(label(" Subwoofer   ", 11f, t.mutedText, false))
-        legend.addView(label("\u25A0", 11f, Palette.ACCENT, true))
-        legend.addView(label(" Speakers", 11f, t.mutedText, false))
+        legend.addView(swatch(Palette.SUB), LinearLayout.LayoutParams(dp(10), dp(10)).apply { rightMargin = dp(5) })
+        legend.addView(label("Subwoofer", 11f, t.mutedText, false))
+        legend.addView(swatch(Palette.ACCENT), LinearLayout.LayoutParams(dp(10), dp(10)).apply { leftMargin = dp(12); rightMargin = dp(5) })
+        legend.addView(label("Speakers", 11f, t.mutedText, false))
         head.addView(legend)
         splitPanel.addView(head)
         splitPanel.addView(spacer(4))
         val split = SubSplitView(this).apply {
             subLevel = st.subLevel; crossover = st.subFreq; accentColor = Palette.ACCENT; theme = t
         }
+        split.minimumHeight = dp(140)
         splitPanel.addView(split, LinearLayout.LayoutParams(-1, 0, 1f))
         col.addView(splitPanel, LinearLayout.LayoutParams(-1, 0, 1f))
         col.addView(spacer(10))
@@ -388,7 +521,7 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             background = panelBg(t)
             elevation = dpf(4f)
-            setPadding(dp(16), dp(14), dp(16), dp(14))
+            setPadding(dp(18), dp(16), dp(18), dp(16))
         }
         val subHead = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
         subHead.addView(label("SUB LEVEL", 15f, Palette.SUB, true), LinearLayout.LayoutParams(0, -2, 1f))
@@ -399,14 +532,15 @@ class MainActivity : Activity() {
 
         fun liveSub(v: Float) {
             st.subLevel = v.coerceIn(-12f, 12f)
+            st.dirty = true
             AudioEngine.apply(st)
             subValueTv.text = fmtDb(st.subLevel)
             split.subLevel = st.subLevel
         }
-        fun stepSub(delta: Float) { st.subLevel = (st.subLevel + delta).coerceIn(-12f, 12f); commit(); render() }
+        fun stepSub(delta: Float) { st.subLevel = (st.subLevel + delta).coerceIn(-12f, 12f); st.dirty = true; commit(); render() }
 
         val subSlideRow = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
-        subSlideRow.addView(knobButton(t, "\u2212") { stepSub(-1f) }, LinearLayout.LayoutParams(dp(48), dp(48)))
+        subSlideRow.addView(iconKnob(t, IconKind.MINUS) { stepSub(-1f) }, LinearLayout.LayoutParams(dp(48), dp(48)))
         val subSeek = SeekBar(this).apply {
             max = 48; progress = ((st.subLevel + 12f) * 2f).toInt().coerceIn(0, 48)
             styleSlimSeekBar(this, t.track, Palette.SUB)
@@ -418,8 +552,8 @@ class MainActivity : Activity() {
                 override fun onStopTrackingTouch(sb: SeekBar) { st.save(this@MainActivity) }
             })
         }
-        subSlideRow.addView(subSeek, LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = dp(10); rightMargin = dp(10) })
-        subSlideRow.addView(knobButton(t, "+") { stepSub(1f) }, LinearLayout.LayoutParams(dp(48), dp(48)))
+        subSlideRow.addView(subSeek, LinearLayout.LayoutParams(0, dp(44), 1f).apply { leftMargin = dp(10); rightMargin = dp(10) })
+        subSlideRow.addView(iconKnob(t, IconKind.PLUS) { stepSub(1f) }, LinearLayout.LayoutParams(dp(48), dp(48)))
         subCard.addView(subSlideRow)
         bottomRow.addView(subCard, LinearLayout.LayoutParams(0, -1, 1f).apply { rightMargin = dp(8) })
 
@@ -427,7 +561,7 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             background = panelBg(t)
             elevation = dpf(4f)
-            setPadding(dp(16), dp(14), dp(16), dp(14))
+            setPadding(dp(18), dp(16), dp(18), dp(16))
         }
         xoCard.addView(label("CROSSOVER", 15f, t.text, true))
         xoCard.addView(spacer(10))
@@ -450,97 +584,147 @@ class MainActivity : Activity() {
     private fun buildSetupTab(t: ThemeColors): View {
         val col = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
 
-        // --- row 1: loudness + balance ---
+        // --- engine status: the one card that says whether any of this reaches the speakers ---
+        val ok = AudioEngine.status.startsWith("ENGINE OK")
+        val statusColor = if (!st.enabled) Palette.WARN else if (ok) Palette.OK else Palette.DANGER
+        // A left accent strip carries the status colour; the card itself stays flat
+        // (no outline), matching the rest of the app once borders were removed.
+        val statusCard = LinearLayout(this).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            background = panelBg(t)
+            elevation = dpf(4f)
+            setPadding(dp(18), dp(14), dp(20), dp(14))
+            setOnClickListener { showDiagnostics() }
+        }
+        statusCard.addView(View(this).apply {
+            background = GradientDrawable().apply { cornerRadius = dpf(2f); setColor(statusColor) }
+        }, LinearLayout.LayoutParams(dp(4), -1).apply { rightMargin = dp(14) })
+        statusCard.addView(View(this).apply {
+            background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(statusColor) }
+        }, LinearLayout.LayoutParams(dp(12), dp(12)).apply { rightMargin = dp(14) })
+        val statusTexts = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        statusTexts.addView(label(
+            if (!st.enabled) "Bypassed" else if (ok) "Engine OK" else "Engine problem",
+            16f, statusColor, true))
+        statusTexts.addView(label(AudioEngine.status, 11f, t.mutedText, false))
+        statusCard.addView(statusTexts, LinearLayout.LayoutParams(0, -2, 1f))
+        statusCard.addView(label("Tap for diagnostics", 11f, t.mutedText, false))
+        col.addView(statusCard)
+        col.addView(spacer(12))
+
+        // --- channel test + amp gain guide ---
         val row1 = LinearLayout(this)
 
-        val loudCard = card(t)
-        val loudRow = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
-        val loudTexts = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        loudTexts.addView(label("Loudness", 16f, t.text, true))
-        loudTexts.addView(label("Gentle bass and treble lift at low volume", 11f, t.mutedText, false))
-        loudRow.addView(loudTexts, LinearLayout.LayoutParams(0, -2, 1f))
-        loudRow.addView(toggleSwitch(t, st.loudness) {
-            st.loudness = !st.loudness; commit(); render()
-        }, LinearLayout.LayoutParams(dp(60), dp(32)))
-        loudCard.addView(loudRow)
-        row1.addView(loudCard, LinearLayout.LayoutParams(0, -1, 1f).apply { rightMargin = dp(8) })
+        val testCard = card(t)
+        testCard.addView(label("Channel Test", 16f, t.text, true))
+        testCard.addView(label("Confirms the wiring and which side is which", 11f, t.mutedText, false))
+        testCard.addView(spacer(10))
+        val testGrid = LinearLayout(this)
+        listOf("left" to "Left Only", "right" to "Right Only").forEach { (side, lbl) ->
+            testGrid.addView(pillChip(lbl, ToneGenerator.playing == side, Palette.ACCENT, Palette.ACCENT_DEEP, t) {
+                if (ToneGenerator.playing == side) ToneGenerator.stop()
+                else ToneGenerator.play(side) { handler.post { if (tab == "setup") render() } }
+                render()
+            }, LinearLayout.LayoutParams(0, dp(46), 1f).apply { setMargins(dp(3), 0, dp(3), 0) })
+        }
+        testCard.addView(testGrid)
+        testCard.addView(spacer(8))
+        testCard.addView(label(
+            if (ToneGenerator.playing != null) "Playing - stops by itself in a few seconds"
+            else "A soft 440 Hz tone on one side, at a safe level",
+            11f, if (ToneGenerator.playing != null) Palette.ACCENT else t.mutedText, false))
+        row1.addView(testCard, LinearLayout.LayoutParams(0, -1, 1f).apply { rightMargin = dp(7) })
 
-        val balCard = card(t)
-        val balHead = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
-        balHead.addView(label("Balance", 16f, t.text, true), LinearLayout.LayoutParams(0, -2, 1f))
-        val balWord = if (st.balance == 0) "Both sides equal"
-            else if (st.balance < 0) "Louder on the left" else "Louder on the right"
-        balHead.addView(label(balWord, 11f, t.mutedText, false))
-        balCard.addView(balHead)
-        balCard.addView(spacer(10))
-
-        val balRow = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
-        balRow.addView(sideTag(t, "L", "Driver", st.balance < 0), LinearLayout.LayoutParams(dp(56), -2).apply { rightMargin = dp(10) })
-
-        val balMid = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        val balBtns = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
-        balBtns.addView(knobButton(t, "\u2212") {
-            st.balance = (st.balance - 1).coerceAtLeast(-6); commit(); render()
-        }, LinearLayout.LayoutParams(dp(40), dp(40)))
-        balBtns.addView(BalanceTrackView(this).apply {
-            value = st.balance; trackColor = t.track; markColor = t.panelBorder
-        }, LinearLayout.LayoutParams(0, dp(24), 1f).apply { leftMargin = dp(8); rightMargin = dp(8) })
-        balBtns.addView(knobButton(t, "+") {
-            st.balance = (st.balance + 1).coerceAtMost(6); commit(); render()
-        }, LinearLayout.LayoutParams(dp(40), dp(40)))
-        balMid.addView(balBtns)
-        balMid.addView(spacer(6))
-        balMid.addView(pillChip("CENTER", false, Palette.ACCENT, Palette.ACCENT_DEEP, t) {
-            st.balance = 0; commit(); render()
-        }.apply { alpha = if (st.balance == 0) 0.45f else 1f }, LinearLayout.LayoutParams(-1, dp(36)))
-        balRow.addView(balMid, LinearLayout.LayoutParams(0, -2, 1f))
-
-        balRow.addView(sideTag(t, "R", "Passenger", st.balance > 0), LinearLayout.LayoutParams(dp(56), -2).apply { leftMargin = dp(10) })
-        balCard.addView(balRow)
-        row1.addView(balCard, LinearLayout.LayoutParams(0, -1, 1f).apply { leftMargin = dp(8) })
+        val ambCard = card(t)
+        val ambHead = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
+        ambHead.addView(label("Ambience", 16f, t.text, true), LinearLayout.LayoutParams(0, -2, 1f))
+        ambHead.addView(label(AudioEngine.AMBIENCE_NOTES[st.ambience] ?: "", 11f, t.mutedText, false))
+        ambCard.addView(ambHead)
+        ambCard.addView(spacer(10))
+        AudioEngine.AMBIENCE_IDS.chunked(3).forEach { chunk ->
+            val row = LinearLayout(this)
+            chunk.forEach { id ->
+                row.addView(pillChip(AudioEngine.AMBIENCE_LABELS[id] ?: id, st.ambience == id,
+                    Color.parseColor("#AF9BDB"), Color.parseColor("#6E5CA8"), t) {
+                    st.ambience = id; commit(); render()
+                }, LinearLayout.LayoutParams(0, dp(44), 1f).apply { setMargins(dp(3), 0, dp(3), 0) })
+            }
+            ambCard.addView(row)
+            ambCard.addView(spacer(8))
+        }
+        ambCard.addView(spacer(8))
+        ambCard.addView(label(
+            "A car cabin already has its own reflections, so these often blur vocals and bass. Worth a listen, but Off suits most music.",
+            11f, t.mutedText, false).apply { setLineSpacing(dpf(3f), 1f) })
+        row1.addView(ambCard, LinearLayout.LayoutParams(0, -1, 1f).apply { leftMargin = dp(7) })
 
         col.addView(row1, LinearLayout.LayoutParams(-1, 0, 1f))
         col.addView(spacer(12))
 
-        // --- row 2: high-pass + headroom ---
+        // --- loudness / balance / high-pass, one compact row ---
         val row2 = LinearLayout(this)
 
+        val loudCard = card(t)
+        val loudRow = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
+        val loudTexts = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        loudTexts.addView(label("Loudness", 14f, t.text, true))
+        loudTexts.addView(label("Lift at low volume", 11f, t.mutedText, false))
+        loudRow.addView(loudTexts, LinearLayout.LayoutParams(0, -2, 1f))
+        loudRow.addView(toggleSwitch(t, st.loudness) {
+            st.loudness = !st.loudness; commit(); render()
+        }, LinearLayout.LayoutParams(dp(56), dp(30)))
+        loudCard.addView(loudRow)
+        row2.addView(loudCard, LinearLayout.LayoutParams(0, -1, 0.85f).apply { rightMargin = dp(7) })
+
+        val balCard = card(t)
+        val balHead = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
+        balHead.addView(label("Balance", 14f, t.text, true), LinearLayout.LayoutParams(0, -2, 1f))
+        val balWord = if (st.balance == 0) "Both sides equal"
+            else if (st.balance < 0) "Louder on the left" else "Louder on the right"
+        val balHeadWord = label(balWord, 11f, t.mutedText, false)
+        balHead.addView(balHeadWord)
+        balCard.addView(balHead)
+        balCard.addView(spacer(8))
+
+        val balRow = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
+        balRow.addView(sideTag(t, "L", "Driver", st.balance < 0),
+            LinearLayout.LayoutParams(dp(50), -2).apply { rightMargin = dp(8) })
+        val balTrack = BalanceTrackView(this).apply {
+            value = st.balance; trackColor = t.track; markColor = t.panelBorder
+            onValueChange = { v ->
+                st.balance = v
+                AudioEngine.apply(st)
+                balHeadWord.text = if (v == 0) "Both sides equal"
+                    else if (v < 0) "Louder on the left" else "Louder on the right"
+            }
+            onValueChangeEnd = { st.save(this@MainActivity); render() }
+        }
+        balRow.addView(balTrack, LinearLayout.LayoutParams(0, dp(40), 1f))
+        balRow.addView(sideTag(t, "R", "Passenger", st.balance > 0),
+            LinearLayout.LayoutParams(dp(50), -2).apply { leftMargin = dp(8) })
+        balRow.addView(pillChip("CENTER", false, Palette.ACCENT, Palette.ACCENT_DEEP, t) {
+            st.balance = 0; commit(); render()
+        }.apply { alpha = if (st.balance == 0) 0.45f else 1f },
+            LinearLayout.LayoutParams(dp(74), dp(36)).apply { leftMargin = dp(8) })
+        balCard.addView(balRow)
+        row2.addView(balCard, LinearLayout.LayoutParams(0, -1, 1.3f).apply { leftMargin = dp(7); rightMargin = dp(7) })
+
         val hpCard = card(t)
-        hpCard.addView(label("Speaker High-Pass", 16f, t.text, true))
-        hpCard.addView(label("Remove low frequencies from the speakers \u2014 less distortion, let the sub do the work",
-            11f, t.mutedText, false))
-        hpCard.addView(spacer(10))
+        val hpHead = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
+        hpHead.addView(label("Speaker High-Pass", 14f, t.text, true), LinearLayout.LayoutParams(0, -2, 1f))
+        hpHead.addView(label("keeps bass off the doors", 11f, t.mutedText, false))
+        hpCard.addView(hpHead)
+        hpCard.addView(spacer(8))
         val hpGrid = LinearLayout(this)
         listOf(0, 60, 80, 100).forEach { f ->
             hpGrid.addView(pillChip(if (f == 0) "Off" else "$f Hz", st.highPass == f, Palette.ACCENT, Palette.ACCENT_DEEP, t) {
                 st.highPass = f; commit(); render()
-            }, LinearLayout.LayoutParams(0, dp(46), 1f).apply { setMargins(dp(3), 0, dp(3), 0) })
+            }, LinearLayout.LayoutParams(0, dp(42), 1f).apply { setMargins(dp(3), 0, dp(3), 0) })
         }
         hpCard.addView(hpGrid)
-        row2.addView(hpCard, LinearLayout.LayoutParams(0, -1, 1f).apply { rightMargin = dp(8) })
+        row2.addView(hpCard, LinearLayout.LayoutParams(0, -1, 1.1f).apply { leftMargin = dp(7) })
 
-        val hrCard = card(t)
-        val headroom = AudioEngine.headroom(st)
-        val maxBoost = maxBoost()
-        val hrColor = if (maxBoost >= 9f) Palette.DANGER else if (maxBoost >= 5f) Palette.WARN else Palette.OK
-        val hrHead = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
-        hrHead.addView(label("Headroom", 16f, t.text, true), LinearLayout.LayoutParams(0, -2, 1f))
-        hrHead.addView(label("%.1f dB".format(headroom), 20f, hrColor, true))
-        hrCard.addView(hrHead)
-        hrCard.addView(spacer(10))
-        hrCard.addView(BarView(this).apply {
-            fraction = (maxBoost / 12f).coerceIn(0f, 1f)
-            barColor = hrColor
-            trackColor = t.track
-        }, LinearLayout.LayoutParams(-1, dp(10)))
-        hrCard.addView(spacer(8))
-        val hrNote = if (maxBoost >= 9f) "Very high boost \u2014 keep the volume down or it may clip."
-            else if (maxBoost >= 5f) "Fine, but watch out at high volume."
-            else "Safe \u2014 no risk of clipping."
-        hrCard.addView(label(hrNote, 11f, t.mutedText, false))
-        row2.addView(hrCard, LinearLayout.LayoutParams(0, -1, 1f).apply { leftMargin = dp(8) })
-
-        col.addView(row2, LinearLayout.LayoutParams(-1, 0, 1f))
+        col.addView(row2, LinearLayout.LayoutParams(-1, -2))
         return col
     }
 
@@ -558,7 +742,7 @@ class MainActivity : Activity() {
         orientation = LinearLayout.VERTICAL
         background = panelBg(t)
         elevation = dpf(4f)
-        setPadding(dp(18), dp(16), dp(18), dp(16))
+        setPadding(dp(20), dp(18), dp(20), dp(18))
         gravity = Gravity.CENTER_VERTICAL
     }
 
@@ -579,10 +763,8 @@ class MainActivity : Activity() {
         val wrap = LinearLayout(this).apply {
             gravity = if (on) Gravity.END or Gravity.CENTER_VERTICAL else Gravity.START or Gravity.CENTER_VERTICAL
             setPadding(dp(3), dp(3), dp(3), dp(3))
-            background = pillGradient(
-                if (on) Palette.ACCENT else t.knobBgTop,
-                if (on) Palette.ACCENT_DEEP else t.knobBgBottom,
-                if (on) Palette.ACCENT else t.knobBorder, dp(16))
+            background = if (on) pillGradient(Palette.ACCENT, Palette.ACCENT_DEEP, Palette.ACCENT, dp(16))
+                else flatPillGradient(t.knobBgTop, t.knobBgBottom, dp(16))
             setOnClickListener { onClick() }
         }
         wrap.addView(View(this).apply {
@@ -608,21 +790,47 @@ class MainActivity : Activity() {
         this.text = text; textSize = 13f; setTypeface(null, Typeface.BOLD); gravity = Gravity.CENTER
         setTextColor(if (active) Color.WHITE else t.knobText)
         background = if (active) pillGradient(onTop, onBottom, onTop, dp(12))
-            else pillGradient(t.knobBgTop, t.knobBgBottom, t.knobBorder, dp(12))
+            else flatPillGradient(t.knobBgTop, t.knobBgBottom, dp(12))
         elevation = dpf(3f)
         setOnClickListener { onClick() }
     }
 
-    private fun tabChip(text: String, active: Boolean, t: ThemeColors, onClick: () -> Unit) = TextView(this).apply {
-        this.text = text; textSize = 12f; setTypeface(null, Typeface.BOLD); gravity = Gravity.CENTER
-        setTextColor(if (active) t.tabOnText else t.mutedText)
-        background = if (active) pillGradient(t.tabOnTop, t.tabOnBottom, t.tabOnTop, dp(20))
-            else GradientDrawable().apply { cornerRadius = dpf(20f); setColor(Color.TRANSPARENT) }
-        if (active) elevation = dpf(3f)
-        setOnClickListener { onClick() }
+    /** A tab chip: icon + label, highlighted with a solid fill and a soft glow when active. */
+    private fun tabChip(text: String, icon: IconKind, active: Boolean, t: ThemeColors, onClick: () -> Unit): View {
+        val chip = LinearLayout(this).apply {
+            gravity = Gravity.CENTER
+            background = if (active) flatPillGradient(t.tabOnTop, t.tabOnBottom, dp(20))
+                else GradientDrawable().apply { cornerRadius = dpf(20f); setColor(Color.TRANSPARENT) }
+            elevation = if (active) dpf(4f) else 0f
+            setOnClickListener { onClick() }
+        }
+        chip.addView(BandIconView(this, icon).apply {
+            iconColor = if (active) Palette.ACCENT else t.mutedText
+            scale = 0.68f
+        }, LinearLayout.LayoutParams(dp(18), dp(18)).apply { rightMargin = dp(7) })
+        val lbl = text
+        chip.addView(TextView(this).apply {
+            this.text = lbl
+            textSize = 12f; setTypeface(null, Typeface.BOLD)
+            setTextColor(if (active) t.tabOnText else t.mutedText)
+        })
+        return chip
     }
 
-    private fun panelBg(t: ThemeColors) = pillGradient(t.panelBgTop, t.panelBgBottom, t.panelBorder, dp(18))
+    private fun swatch(color: Int) = View(this).apply {
+        background = GradientDrawable().apply { cornerRadius = dpf(2f); setColor(color) }
+    }
+
+    private fun panelBg(t: ThemeColors) = flatPillGradient(t.panelBgTop, t.panelBgBottom, dp(18))
+
+    /** Same gradient fill as pillGradient, but with no stroke — for neutral surfaces. */
+    private fun flatPillGradient(top: Int, bottom: Int, radius: Int) = GradientDrawable(
+        GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(top, bottom)
+    ).apply { cornerRadius = radius.toFloat() }
+
+    private fun flatCircleGradient(top: Int, bottom: Int) = GradientDrawable(
+        GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(top, bottom)
+    ).apply { shape = GradientDrawable.OVAL }
 
     private fun vertGradient(top: Int, bottom: Int, radius: Int) = GradientDrawable(
         GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(top, bottom)
@@ -656,11 +864,12 @@ class MainActivity : Activity() {
         seek.progressDrawable = layer
         seek.thumb = GradientDrawable().apply {
             shape = GradientDrawable.OVAL
-            colors = intArrayOf(Color.parseColor("#FBFCFD"), Color.parseColor("#BFC5D0"))
-            orientation = GradientDrawable.Orientation.TOP_BOTTOM
-            setStroke(dp(1), Color.parseColor("#8C939F"))
+            setColor(Color.parseColor("#F4F6F9"))
+            setStroke(dp(2), Color.parseColor("#8C939F"))
             setSize(dp(24), dp(24))
         }
         seek.minimumHeight = totalH
+        seek.minimumWidth = dp(80)
+        seek.thumbOffset = 0
     }
 }

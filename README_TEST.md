@@ -1,46 +1,88 @@
-# Owais Car Audio Pro — v2.0
+# Owais Car Audio Pro — v4.1
 
 ## Build
 Push to GitHub; the Actions workflow `Build APK` produces the debug APK as the
 artifact `CarAudioPro-apk`. Or locally: `gradle assembleDebug`.
 
 ## First thing to check on the SANSUI unit
-Open the app and tap the round **i** button in the header. The Diagnostics
-dialog must say:
+Open the SETUP tab. The status card at the top must read **Engine OK**. Tap it
+for the full diagnostics dialog, which must say:
 
     Status: ENGINE OK · All apps · ACTIVE
 
 If it says **WARNING: control kisi aur app ke paas hai**, the stock DSP is
-holding the effect and nothing in this app will change the sound. Everything
-else is pointless until that line reads OK.
+holding the effect and nothing in this app — EQ, sub, ambience, any of it —
+will change the sound. Everything else is pointless until that line reads OK.
 
 The dialog also reports:
-  * `Per-channel balance supported: true/false` — if false, the Balance card on
-    the SETUP tab does nothing on this device and should be removed.
-  * The current loudness / high-pass / balance values.
+  * `Per-channel balance supported: true/false` — if false, the Balance card
+    does nothing on this device.
+  * `Ambience (PresetReverb) supported: true/false` — if false, the Ambience
+    card does nothing either; the two use different effect APIs and can fail
+    independently.
+
+## App icon
+A launcher icon is included (adaptive icon for API 26+, flat PNGs for older
+devices): a dark gunmetal background with blue equalizer bars, matching the
+in-app theme. Files are under app/src/main/res/mipmap-*.
+
+## v4.1 changes
+* Tab chips in the header now carry an icon (equalizer bars / waveform /
+  speaker box / gear) alongside the label, and the active tab is more clearly
+  highlighted.
+* Removed the plain grey outline that sat around every card, panel and
+  button. Surfaces are now distinguished purely by their gradient fill and
+  shadow; the few places that still show a thin coloured line (the active
+  preset/crossover/high-pass chip, the power button when on) use that
+  control's own accent colour, not a neutral grey — so it reads as a glow
+  rather than a box around the element.
+* A little more breathing room: wider gaps between header items, between
+  cards, and inside card padding.
 
 ## What's in this version
 * **Greyish (gunmetal) theme**, dark and light, with gradients and soft shadows.
 * **Four tabs**: CUSTOM, EQUALIZER, SUBWOOFER, SETUP.
-* **Presets** (Daily / Bass / Vocal / Night) on the CUSTOM tab. All four are
-  cut-only curves — no band goes above 0 dB — so the engine never has to pull
-  the input gain down and nothing clips. Expect them to sound quieter than
-  before; raise the head unit volume to compensate.
-* **SETUP tab**: Loudness, Balance, Speaker High-Pass, Headroom meter.
+* **Headroom meter** under the header, on every tab, green to amber to red.
+* **Presets with per-slot save**: Daily / Bass / Vocal / Night each remember
+  your own edited version once you tap SAVE, independently of one another.
+  RESET discards your saved version and goes back to the factory curve for
+  whichever slot is selected. A dot on a preset chip shows amber for unsaved
+  edits, and the accent colour once saved.
+* **SETUP tab**: engine status card, channel test (safe, self-stopping),
+  ambience (PresetReverb rooms), loudness, balance, speaker high-pass.
 * **Weight-based layout** — fits 1024x600 and 1280x800 without clipping.
-* Everything auto-saves on change; there is no save button.
+* All header and button icons are **drawn, not font glyphs** — head-unit fonts
+  often have no glyph for characters like U+23FB and left a blank button.
+* Everything auto-saves on change; there is no save button except for presets,
+  which are save-on-purpose so a quick tweak does not overwrite your tuning.
 
-## Notes on the new audio features
+## Channel test
+A soft 440 Hz tone on one side at a fixed low level, stopping by itself after
+a few seconds. Use it to confirm nothing is wired backwards.
+
+Pink noise and bass sweeps are deliberately **not** included: continuous high
+frequencies cook tweeters, and sub-30 Hz sweeps can bottom out a subwoofer
+before anything sounds wrong. They are needed once, if ever; a familiar track
+at moderate volume does the same job for setting amp gain.
+
+## Ambience
+Android's PresetReverb — Off, Room, Hall, Concert, Plate, Echo (Echo reuses
+the largest hall preset; PresetReverb has no true echo/delay). This is a
+second, independent effect from the EQ, so it can work even if EQ does not,
+or vice versa. A car cabin already has its own reflections, so these often
+blur vocals and bass — worth a listen, but Off suits most music.
+
+## Notes on the other new audio features
 * **Speaker High-Pass** adds a post-EQ band that cuts below the chosen
   frequency. Use 80 Hz with the sub crossover at 80 Hz.
-* **Loudness** is a fixed bass+treble lift, not volume-tracking: the app cannot
-  read the head unit's volume knob.
+* **Loudness** is a fixed bass+treble lift, not volume-tracking: the app
+  cannot read the head unit's volume knob.
 * **Balance** attenuates the quieter side only, so it costs no headroom. It
-  needs per-channel input gain, which may not work on every device — check the
-  diagnostics line above.
+  needs per-channel input gain, which may not work on every device — check
+  the diagnostics line above.
 
 ## Still open
-* Boot after a full battery disconnect: the app may stay in the "stopped" state
-  until opened once by hand. `LOCKED_BOOT_COMPLETED` and `directBootAware` are
-  already set. To confirm:
+* Boot after a full battery disconnect: the app may stay in the "stopped"
+  state until opened once by hand. `LOCKED_BOOT_COMPLETED` and
+  `directBootAware` are already set. To confirm:
   `adb shell dumpsys package com.reactivate.caraudiopro | grep -i stopped`

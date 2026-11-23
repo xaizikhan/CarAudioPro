@@ -72,6 +72,14 @@ class SoundCurveView(context: Context) : View(context) {
         return padTop() + plotH / 2f - g / 12f * (plotH / 2f)
     }
 
+    override fun onMeasure(wSpec: Int, hSpec: Int) {
+        val d = resources.displayMetrics.density
+        setMeasuredDimension(
+            resolveSize((320 * d).toInt(), wSpec),
+            resolveSize((200 * d).toInt(), hSpec)
+        )
+    }
+
     override fun onDraw(canvas: Canvas) {
         if (width == 0 || height == 0) return
         val plotH = height - padTop() - padBottom()
