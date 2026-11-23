@@ -55,6 +55,14 @@ class SubSplitView(context: Context) : View(context) {
         return padL() + (log10(f) - log10(20f)) / 3f * plotW
     }
 
+    override fun onMeasure(wSpec: Int, hSpec: Int) {
+        val d = resources.displayMetrics.density
+        setMeasuredDimension(
+            resolveSize((320 * d).toInt(), wSpec),
+            resolveSize((170 * d).toInt(), hSpec)
+        )
+    }
+
     override fun onDraw(canvas: Canvas) {
         if (width == 0 || height == 0) return
         val plotH = height - padTop() - padBottom()

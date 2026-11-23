@@ -4,6 +4,7 @@ import android.content.Context
 import android.media.AudioManager
 import android.media.audiofx.AudioEffect
 import android.media.audiofx.DynamicsProcessing
+import android.media.audiofx.PresetReverb
 import android.os.Build
 import android.util.Log
 import kotlin.math.max
@@ -30,6 +31,35 @@ object AudioEngine {
         1000f, 1600f, 2500f, 4000f, 6300f, 10000f, 16000f)
 
     private val effects = LinkedHashMap<Int, DynamicsProcessing>()
+    private val reverbs = LinkedHashMap<Int, PresetReverb>()
+
+    /**
+     * Ambience uses Android's PresetReverb, a separate effect from the EQ
+     * engine above. DynamicsProcessing has no reverb of its own, and
+     * PresetReverb only ships these fixed rooms — no custom decay or mix.
+     */
+    val AMBIENCE_IDS = listOf("off", "room", "hall", "large", "plate", "echo")
+    val AMBIENCE_LABELS = mapOf(
+        "off" to "Off", "room" to "Room", "hall" to "Hall",
+        "large" to "Concert", "plate" to "Plate", "echo" to "Echo"
+    )
+    val AMBIENCE_NOTES = mapOf(
+        "off" to "Dry, no reverb",
+        "room" to "A small, close space",
+        "hall" to "Medium hall — gentle",
+        "large" to "Large hall — widest",
+        "plate" to "Classic studio plate",
+        "echo" to "Longest tail"
+    )
+    private fun reverbPresetFor(id: String): Short = when (id) {
+        "room" -> PresetReverb.PRESET_SMALLROOM
+        "hall" -> PresetReverb.PRESET_MEDIUMHALL
+        "large" -> PresetReverb.PRESET_LARGEHALL
+        "plate" -> PresetReverb.PRESET_PLATE
+        "echo" -> PresetReverb.PRESET_LARGEHALL   // PresetReverb has no distinct "echo"; this is its longest tail
+        else -> PresetReverb.PRESET_NONE
+    }
+    @Volatile var reverbWorks: Boolean = true
     private val owners = HashMap<Int, String>()
     private val errors = ArrayDeque<String>()
     @Volatile var current: AudioSettings? = null
@@ -105,6 +135,16 @@ object AudioEngine {
                 err("apply session $sess: ${e.javaClass.simpleName}: ${e.message}")
             }
         }
+
+        reverbs.forEach { (sess, pr) ->
+            try {
+                pr.enabled = s.ambience != "off"
+                pr.preset = reverbPresetFor(s.ambience)
+            } catch (e: Throwable) {
+                reverbWorks = false
+                err("reverb session $sess: ${e.javaClass.simpleName}: ${e.message}")
+            }
+        }
         updateStatus()
     }
 
@@ -156,7 +196,8 @@ object AudioEngine {
     @Synchronized
     fun release() {
         effects.values.forEach { runCatching { it.release() } }
-        effects.clear(); owners.clear()
+        reverbs.values.forEach { runCatching { it.release() } }
+        effects.clear(); reverbs.clear(); owners.clear()
         status = "Engine stopped"
     }
 
@@ -175,6 +216,12 @@ object AudioEngine {
             owners[session] = owner
         } catch (e: Throwable) {
             err("attach session $session: ${e.javaClass.simpleName}: ${e.message}")
+        }
+        try {
+            reverbs[session] = PresetReverb(PRIORITY, session).apply { enabled = false }
+        } catch (e: Throwable) {
+            reverbWorks = false
+            err("attach reverb session $session: ${e.javaClass.simpleName}: ${e.message}")
         }
         updateStatus()
     }
@@ -210,6 +257,8 @@ object AudioEngine {
         }
         append("Auto headroom: ${"%.1f".format(current?.let { headroom(it) } ?: 0f)} dB\n")
         append("Per-channel balance supported: $balanceWorks\n")
+        append("Ambience (PresetReverb) supported: $reverbWorks\n")
+        current?.let { append("Ambience: ${AMBIENCE_LABELS[it.ambience] ?: it.ambience}\n") }
         current?.let { append("Loudness: ${it.loudness} · High-pass: ${if (it.highPass > 0) "${it.highPass} Hz" else "off"} · Balance: ${it.balance}\n") }
         append("\nOutput devices:\n")
         ctx.getSystemService(AudioManager::class.java)
