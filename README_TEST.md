@@ -1,4 +1,4 @@
-# Owais Car Audio Pro — v4.1
+# Owais Car Audio Pro — v4.5
 
 ## Build
 Push to GitHub; the Actions workflow `Build APK` produces the debug APK as the
@@ -25,6 +25,41 @@ The dialog also reports:
 A launcher icon is included (adaptive icon for API 26+, flat PNGs for older
 devices): a dark gunmetal background with blue equalizer bars, matching the
 in-app theme. Files are under app/src/main/res/mipmap-*.
+
+## v4.5 — reverted the v4.4 SETUP merge
+v4.4 put Ambience, Loudness, Balance and High-Pass in one equal-height row.
+It looked uneven: Ambience has two rows of pills plus a hint line, the other
+three have one short row each, so stretching them to the same height left
+Ambience full and the other three mostly empty around a single control.
+Back to the v4.3 layout — Ambience full-width on its own, the other three
+below in a compact row — which was correct to begin with.
+
+## v4.4 changes
+* **SETUP layout merged into one row**: Ambience, Loudness, Balance and
+  Speaker High-Pass now sit side by side as four cards, instead of Ambience
+  alone on top with an empty strip above the other three. No functionality
+  changed, just the empty space closed up.
+
+## v4.3 changes
+* **Balance**: dragging the L/R track now highlights the Driver/Passenger
+  side and dims/brightens the CENTER button live, the same way the slider
+  fixes in v4.2 made headroom update live. Same root cause — a live-drag
+  path that didn't touch the views built at render time.
+* **Loudness and Speaker High-Pass checked**: both are tap controls (toggle,
+  chips), not drags, so every tap already triggers a full `render()`. No
+  change needed there; confirmed working as intended.
+
+## v4.2 changes — bug fixes
+* **Headroom and SAVE now update from the slider, not just the +/- buttons.**
+  The bug: releasing a slider only called `st.save()`, never `render()`, so
+  the headroom meter and the preset SAVE indicator stayed frozen until you
+  tapped a +/- button (which does call `render()`). Fixed on the Bass/Mid/
+  Treble sliders, the Sub Level slider, and dragging the EQUALIZER graph.
+* **Headroom now updates live, on every drag tick, from any of those
+  controls** — not just on release — via a direct reference to the meter
+  instead of a full screen rebuild, so it stays smooth while dragging.
+* **Channel Test removed** from the SETUP tab — wasn't useful day to day.
+  Ambience now takes the full width where it sat. `ToneGenerator.kt` deleted.
 
 ## v4.1 changes
 * Tab chips in the header now carry an icon (equalizer bars / waveform /
